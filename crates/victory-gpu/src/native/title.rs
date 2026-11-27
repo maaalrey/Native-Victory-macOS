@@ -178,6 +178,14 @@ pub struct Guessed<B: GraphicsBackend> {
     /// The vertex shader's container, translated again for rectangle lists at the first such draw.
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     pub(crate) vs_source: Arc<crate::pipeline::Shader>,
+    /// The pixel shader's container, translated again for 32-bit integer targets
+    /// ([`crate::pipeline::Shader::translate_uint`]) at the first draw into them.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) ps_source: Option<Arc<crate::pipeline::Shader>>,
+    /// The targets the pixel shader writes (bit n: `SV_Target` n), read from it at the first draw
+    /// into a 32-bit integer target.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) ps_writes: std::cell::OnceCell<u8>,
     /// By the formats and strides they were made for.
     pub made: std::cell::RefCell<HashMap<String, Pipe<B>>>,
 }

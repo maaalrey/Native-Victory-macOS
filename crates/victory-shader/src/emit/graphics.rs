@@ -15,7 +15,8 @@
 //!   vertex parameter n), with the channels it reads; the VGPRs it reads on entry are, in order,
 //!   barycentric pairs (when it interpolates), then position, front face, ancillary, coverage,
 //!   with matching system-value elements declared in `ISG1`; its colour exports `exp mrt<n>` are
-//!   targets of register n, in float (a compressed export is two FP16 values per dword);
+//!   targets of register n, in float (a compressed export is two FP16 values per dword), or `u32`
+//!   for the 32-bit integer targets `Options::uint_targets` names;
 //! * the wave size is inferred from wave64/wave32-only scalar mask instructions and high-half
 //!   mask registers (`exec_hi`/`vcc_hi`), defaulting to 64 when neither signal is present.
 
@@ -1091,6 +1092,27 @@ mod tests {
         assert!(c.part(FourCC::ISG1).is_some() && c.part(FourCC::OSG1).is_some());
         let part = c.part(FourCC::ACCC).unwrap();
         assert_eq!(program(part.data).unwrap().stage, HwStage::Ps);
+    }
+
+    /// A colour export into a 32-bit unsigned-integer target (`Options::uint_targets`) is a `u32`
+    /// output stored as the exported bits; without it, a float (which Metal will not link to an
+    /// integer target).
+    #[test]
+    fn a_pixel_shaders_exports_to_uint_targets_are_u32() {
+        let meta = [0u8; 0x10];
+        let c = container(HwStage::Ps, &pixel_code(), &meta).unwrap();
+        let target = |uint_targets| {
+            let o = super::super::Options { wave32_host: true, uint_targets, ..Default::default() };
+            let h = super::super::translate_with(&c, o).unwrap();
+            let c = crate::Container::parse(&h.dxil).unwrap();
+            let outs = super::super::signature(c.part(FourCC::OSG1).unwrap().data).unwrap();
+            outs.iter().find(|e| e.name == "SV_Target" && e.index == 0).unwrap().comp
+        };
+        // DXIL component types: 9 f32, 5 u32.
+        assert_eq!(target(0), 9);
+        assert_eq!(target(1), 5);
+        // Another target's bit leaves target 0 a float.
+        assert_eq!(target(2), 9);
     }
 
     #[test]

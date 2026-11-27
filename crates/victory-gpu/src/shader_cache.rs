@@ -301,6 +301,8 @@ pub fn host_shader(container: &[u8]) -> (Result<HostShader, String>, bool) {
         rect_list: false,
         copy_params: [0; 32],
         extra_params: 0,
+        // The D3D12 path's targets take the export's type as it is.
+        uint_targets: 0,
         // `DispatchX` runs thread counts as group counts here (`list::dispatch_x`).
         thread_counts: false,
     };

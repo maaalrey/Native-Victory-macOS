@@ -59,6 +59,18 @@ pub fn translate_extra(container: &[u8], rect: bool, extra: u32, copy_params: [u
     translate_cached(container, Options { rect_list: rect, extra_params: extra, copy_params, ..options() })
 }
 
+/// A guessed pixel shader's container translated for 32-bit unsigned-integer targets (bit n:
+/// target n, `Options::uint_targets`): its exports to them are stored as `u32`.
+pub fn translate_uint(container: &[u8], targets: u8) -> Result<HostShader, String> {
+    translate_cached(container, Options { uint_targets: targets, ..options() })
+}
+
+/// Whether [`translate_uint`]'s translation is in the disk cache already.
+pub fn uint_cached(container: &[u8], targets: u8) -> bool {
+    let o = Options { uint_targets: targets, ..options() };
+    crate::shader_cache::native_present(container, &format!("{o:?}"))
+}
+
 /// Whether [`translate_extra`]'s translation is in the disk cache already.
 pub fn extra_cached(container: &[u8], rect: bool, extra: u32, copy_params: [u8; 32]) -> bool {
     let o = Options { rect_list: rect, extra_params: extra, copy_params, ..options() };

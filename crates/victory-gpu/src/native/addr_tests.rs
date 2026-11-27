@@ -458,6 +458,71 @@ fn guessed_fragment_buffer_reads_the_pool_and_checks_record_bounds() {
     assert_eq!(&pixels[(4 * 8 + 4) * 4..][..4], [128, 0, 0, 255]);
 }
 
+/// A guessed pixel shader's colour export into a 32-bit unsigned-integer target: translated as it
+/// is (a float output), Metal will not make the pipeline; translated with the target in
+/// `Options::uint_targets` (`shaders::translate_uint`), the target holds the exported bits. The
+/// value 1 is a denormal as a float, which a float path could flush to 0.
+#[test]
+fn a_guessed_export_into_a_uint_target_is_stored_as_its_bits() {
+    let vertex = [
+        0x7D84_0081, // v_cmp_eq_u32 vcc, 1, v0
+        0xD501_0001, 0x01A9_FEF3, 0x4040_0000, // v_cndmask_b32 v1, -1.0, 3.0, vcc
+        0x7D84_0082, // v_cmp_eq_u32 vcc, 2, v0
+        0xD501_0002, 0x01A9_FEF3, 0x4040_0000, // v_cndmask_b32 v2, -1.0, 3.0, vcc
+        0x7E06_0280, // v_mov_b32 v3, 0
+        0x7E08_02F2, // v_mov_b32 v4, 1.0
+        0xF800_08CF, 0x0403_0201, // exp pos0 v1, v2, v3, v4 done
+        0xBF81_0000, // s_endpgm
+    ];
+    let pixel = [
+        0x7E04_0281, // v_mov_b32 v2, 1
+        0xF800_1801, 0x0000_0002, // exp mrt0 v2 done vm
+        0xBF81_0000, // s_endpgm
+    ];
+    let container = |stage, words: &[u32]| {
+        let bytes: Vec<_> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        victory_shader::emit::graphics::container(stage, &bytes, &[0; 0x10]).unwrap()
+    };
+    let vs = shaders::translate(&container(HwStage::Vs, &vertex)).unwrap();
+    let ps_container = container(HwStage::Ps, &pixel);
+    use victory_metal::msc::DEFAULT_DYLIB;
+    if !std::path::Path::new(DEFAULT_DYLIB).exists() && std::env::var_os("VICTORY_MSC_DYLIB").is_none() {
+        eprintln!("skipped: Metal Shader Converter not installed");
+        return;
+    }
+    let Ok(metal) = Metal::new() else {
+        eprintln!("skipped the draw: no Metal device");
+        return;
+    };
+    let mut t = Title::new(metal, Arc::new(crate::native::memory::PoolTable::default()));
+    let state = Graphics::guess_base().for_draw(vec![Format::R32Uint], None, vec![], &[], false);
+
+    let float = shaders::translate(&ps_container).unwrap();
+    assert!(matches!(t.render_pipe(&vs, Some(&float), &state, "float export"), Pipe::Refused));
+    assert!(
+        t.shaders.refused.iter().any(|r| format!("{r:?}").contains("not compatible")),
+        "{:?}",
+        t.shaders.refused
+    );
+
+    let uint = shaders::translate_uint(&ps_container, 1).unwrap();
+    let Pipe::Render(pso, binding) = t.render_pipe(&vs, Some(&uint), &state, "uint export") else {
+        panic!("{:?}", t.shaders);
+    };
+    let mut desc = TextureDesc::d2(Format::R32Uint, 8, 8);
+    desc.render_target = true;
+    let color = t.host.texture(&desc).unwrap();
+    let mut list = NativeList::default();
+    list.set_render_targets(std::slice::from_ref(&color), None);
+    list.set_graphics_pipeline(&pso, Topology::Triangles);
+    list.set_graphics_binding(binding);
+    list.draw_instanced(3, 1, 0, 0).unwrap();
+    super::run(&t.host, &[&list]);
+    let mut texels = [0u8; 8 * 8 * 4];
+    t.host.backend.read_texture(&color, 0, 0, &mut texels, 8 * 4, 0);
+    assert_eq!(&texels[(4 * 8 + 4) * 4..][..4], 1u32.to_le_bytes());
+}
+
 /// A guessed vertex shader reads its positions through a buffer descriptor built around the address
 /// in its root constants: the page table is bound for the vertex stage. Read as zeros (no table),
 /// the triangle would have no area and nothing would be drawn.

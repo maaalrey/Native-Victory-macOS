@@ -15,7 +15,7 @@ use crate::object::This;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use victory_backend::resources::HeapKind;
+use victory_backend::resources::{Format, HeapKind};
 use victory_metal::metal::Metal;
 
 pub type MetalTitle = Title<Metal>;
@@ -1138,6 +1138,8 @@ fn make_host_pipe(
         Some(g) if g.is_guessed() => match hosts.iter().find(|h| h.0 == "vertex") {
             Some((_, vs)) => Pipe::Guess(Rc::new(Guessed {
                 vs_source: stages.iter().find(|s| s.0 == "vertex").expect("a vertex stage").1.clone(),
+                ps_source: stages.iter().find(|s| s.0 == "pixel").map(|s| s.1.clone()),
+                ps_writes: Default::default(),
                 vs: vs.clone(),
                 ps: hosts.iter().find(|h| h.0 == "pixel").map(|h| h.1.clone()),
                 name,
@@ -1309,9 +1311,35 @@ pub(crate) fn vertex_buffers(this: This, start: u32, count: u32, views: &[Vertex
     });
 }
 
+/// The targets (bit n: target n) that are 32-bit unsigned-integer formats and that `g`'s pixel
+/// shader writes: those its translation must store as `u32` (`Options::uint_targets`). Per draw:
+/// the formats first; the pixel shader's targets are read once.
+fn uint_targets(color: &[Format], g: &Guessed<Metal>) -> u8 {
+    let uint = color
+        .iter()
+        .take(8)
+        .enumerate()
+        .filter(|(_, f)| matches!(f, Format::R32Uint | Format::Rg32Uint))
+        .fold(0u8, |m, (n, _)| m | 1 << n);
+    let Some(ps) = g.ps.as_deref() else { return 0 };
+    if uint == 0 {
+        return 0;
+    }
+    let writes = *g.ps_writes.get_or_init(|| {
+        super::state::pixel_targets(&ps.dxil)
+            .iter()
+            .filter(|&&(n, _)| n < 8)
+            .fold(0, |m, &(n, _)| m | 1 << n)
+    });
+    uint & writes
+}
+
 /// The host pipeline of a guessed pipeline for the targets and vertex buffers the list has bound.
 fn guess(t: &mut MetalTitle, l: &MetalList, g: &Guessed<Metal>, rect: bool) -> Pipe<Metal> {
-    let key = format!("{:?}{rect}", l.strides);
+    // The 32-bit unsigned-integer targets the pixel shader exports to: its translation stores
+    // `u32` there (Metal refuses a float output into an integer target).
+    let uint = uint_targets(&l.targets.color, g);
+    let key = format!("{:?}{rect}{uint}", l.strides);
     if let Some(p) = g.made.borrow().get(&key) {
         return p.clone();
     }
@@ -1367,9 +1395,27 @@ fn guess(t: &mut MetalTitle, l: &MetalList, g: &Guessed<Metal>, rect: bool) -> P
     let vs = widened.as_deref().unwrap_or(base_vs);
     let reads = super::state::vertex_inputs(&vs.dxil).unwrap_or_default();
     let state = g.state.for_draw(l.targets.color.clone(), l.targets.depth, l.strides.clone(), &reads, rect);
+    let uint_ps = match (&g.ps_source, uint) {
+        (Some(s), mask) if mask != 0 => {
+            if spent && !s.uint_cached(mask) {
+                let s = s.clone();
+                put_off(format!("{} uint {mask}", s.hash), move || drop(s.translate_uint(mask)));
+                return Pipe::Refused;
+            }
+            match s.translate_uint(mask) {
+                Ok(h) => Some(h),
+                Err(e) => {
+                    t.refused_translation(&g.name, format!("integer targets: {e}"));
+                    return Pipe::Refused;
+                }
+            }
+        }
+        _ => None,
+    };
+    let ps = uint_ps.as_deref().or(g.ps.as_deref());
     t.compile_wait = compile_wait(t);
     let put_off = t.shaders.put_off;
-    let made = t.render_pipe(vs, g.ps.as_deref(), &state, &g.name);
+    let made = t.render_pipe(vs, ps, &state, &g.name);
     // Put off, it is asked for again at every draw until Metal has made it: logged once made.
     if t.shaders.put_off == put_off {
         tracing::info!(name = %g.name, ?reads, targets = ?l.targets, strides = ?l.strides, "guessed pipeline");

@@ -210,7 +210,8 @@ impl Shader {
                     let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{}_{}.bin", self.stage, self.hash)), &*container);
                 }
                 // A vertex shader keeps its container: a rectangle-list draw translates it again.
-                if self.stage != "vertex" {
+                // So does a pixel shader: a draw into 32-bit integer targets does (`translate_uint`).
+                if self.stage != "vertex" && self.stage != "pixel" {
                     *container = Vec::new();
                 }
                 made
@@ -265,6 +266,19 @@ impl Shader {
     pub(crate) fn translate_extra(&self, rect: bool, extra: u32, copy: [u8; 32]) -> Result<Arc<victory_shader::emit::HostShader>, String> {
         let container = self.container.lock().unwrap_or_else(|e| e.into_inner());
         crate::native::shaders::translate_extra(&container, rect, extra, copy).map(Arc::new)
+    }
+
+    /// Whether [`Self::translate_uint`] would find its translation on disk.
+    pub(crate) fn uint_cached(&self, targets: u8) -> bool {
+        let container = self.container.lock().unwrap_or_else(|e| e.into_inner());
+        crate::native::shaders::uint_cached(&container, targets)
+    }
+
+    /// A pixel shader's translation for 32-bit unsigned-integer targets (bit n: target n), whose
+    /// exports to them are `u32` (not cached here; the disk cache keeps it).
+    pub(crate) fn translate_uint(&self, targets: u8) -> Result<Arc<victory_shader::emit::HostShader>, String> {
+        let container = self.container.lock().unwrap_or_else(|e| e.into_inner());
+        crate::native::shaders::translate_uint(&container, targets).map(Arc::new)
     }
 
     /// The translation for rectangle-list draws, made on first use.

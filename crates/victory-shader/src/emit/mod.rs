@@ -446,6 +446,12 @@ pub struct Options {
     /// For the extra parameters: `copy_params[m] = n + 1` writes the values of `TEXCOORD` n to
     /// `TEXCOORD` m too (a pixel input split off one read two ways, [`HostShader::splits`]).
     pub copy_params: [u8; 32],
+    /// A guessed graphics pixel shader drawn into 32-bit unsigned-integer targets (bit n: target
+    /// n, `R32_UINT` or `R32G32_UINT`): its colour exports to them are declared `u32` and stored
+    /// as the exported bits. Metal refuses a pipeline whose float output feeds an integer target.
+    /// guess: the console writes an `exp mrt<n>` dword to a 32-bit integer target as it is
+    /// (`SPI_SHADER_COL_FORMAT` 32_R or 32_GR, no conversion), as it does for 32-bit floats.
+    pub uint_targets: u8,
     /// A compute program for dispatches that give thread counts, not group counts (the console's
     /// `DispatchX` with thread dimensions): the last group in a dimension is partial. The host
     /// runs whole groups, rounded up, and passes the counts ([`DISPATCH_THREADS`]); every thread
@@ -569,6 +575,16 @@ fn emit_fast(
                 half: false,
             });
             row += 1;
+        }
+    }
+    // Colour outputs to 32-bit unsigned-integer targets ([`Options::uint_targets`]): `u32`, so
+    // the export's bits are stored (`storeOutput.i32`) as they are.
+    if pixel && options.uint_targets != 0 {
+        for e in outputs
+            .iter_mut()
+            .filter(|e| e.kind == 16 && e.index < 8 && options.uint_targets >> e.index & 1 != 0)
+        {
+            e.comp = 5;
         }
     }
     // Interpolation as DXC declares it by default; pixel inputs that are
